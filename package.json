@@ -1,0 +1,35 @@
+{
+  "name": "@asl-throne/agent-observability-mcp",
+  "version": "0.1.0",
+  "description": "MCP server providing AI agent observability — tracing, cost tracking, performance monitoring, and audit trails",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "agent-observability-mcp": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test src/**/*.test.js"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "observability",
+    "agent-tracing",
+    "cost-tracking",
+    "token-usage",
+    "ai-agent",
+    "performance-monitoring",
+    "audit-trail",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  }
+}
