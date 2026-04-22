@@ -1,0 +1,45 @@
+{
+  "serverInfo": {
+    "name": "agent-observability-mcp",
+    "version": "0.1.0",
+    "description": "AI agent observability via MCP — trace actions, track token costs, monitor tool performance, detect anomalies, and generate audit trails",
+    "author": "THRONE AI",
+    "license": "MIT",
+    "homepage": "https://github.com/mdfifty50-boop/agent-observability-mcp",
+    "repository": "https://github.com/mdfifty50-boop/agent-observability-mcp"
+  },
+  "capabilities": {
+    "tools": [
+      { "name": "trace_agent_action", "description": "Log an agent action with metadata for audit trail" },
+      { "name": "track_token_usage", "description": "Track LLM token usage and cost per call" },
+      { "name": "log_tool_call", "description": "Log MCP tool call with latency and success metrics" },
+      { "name": "get_session_summary", "description": "Get cost, token, and performance summary for a session" },
+      { "name": "detect_anomaly", "description": "Detect unusual agent behavior patterns (cost spikes, loops, errors)" },
+      { "name": "get_cost_report", "description": "Generate cost breakdown across sessions grouped by model/tool/provider" }
+    ],
+    "resources": [
+      { "uri": "observability://pricing", "description": "Current LLM pricing table for cost calculation" },
+      { "uri": "observability://best-practices", "description": "Agent observability best practices guide" }
+    ]
+  },
+  "categories": ["monitoring", "observability", "analytics", "developer-tools"],
+  "keywords": ["observability", "tracing", "cost-tracking", "token-usage", "performance", "audit-trail", "ai-agent"],
+  "pricing": {
+    "free_tier": true,
+    "free_limit": "1 agent, 10K events/month, 7-day retention",
+    "starter": "$59/month",
+    "pro": "$299/month",
+    "enterprise": "$999/month"
+  },
+  "install": {
+    "npm": "npx agent-observability-mcp",
+    "claude_desktop": {
+      "mcpServers": {
+        "agent-observability": {
+          "command": "npx",
+          "args": ["agent-observability-mcp"]
+        }
+      }
+    }
+  }
+}
