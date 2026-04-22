@@ -1,8 +1,8 @@
-# agent-observability-mcp
+# agentic-observability-mcp
 
 AI agent observability for MCP. Tracing, cost tracking, performance monitoring, anomaly detection, and audit trails — all via Model Context Protocol.
 
-[![npm version](https://img.shields.io/npm/v/agent-observability-mcp)](https://www.npmjs.com/package/agent-observability-mcp)
+[![npm version](https://img.shields.io/npm/v/agentic-observability-mcp)](https://www.npmjs.com/package/agentic-observability-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Why This Exists
@@ -47,7 +47,7 @@ Add to your MCP configuration (`~/.claude/settings.json` or project `.mcp.json`)
   "mcpServers": {
     "agent-observability": {
       "command": "npx",
-      "args": ["agent-observability-mcp"]
+      "args": ["agentic-observability-mcp"]
     }
   }
 }
@@ -62,7 +62,7 @@ Add to `.cursor/mcp.json`:
   "mcpServers": {
     "agent-observability": {
       "command": "npx",
-      "args": ["agent-observability-mcp"]
+      "args": ["agentic-observability-mcp"]
     }
   }
 }

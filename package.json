@@ -1,11 +1,11 @@
 {
-  "name": "@asl-throne/agent-observability-mcp",
+  "name": "agentic-observability-mcp",
   "version": "0.1.0",
   "description": "MCP server providing AI agent observability — tracing, cost tracking, performance monitoring, and audit trails",
   "type": "module",
   "main": "src/index.js",
   "bin": {
-    "agent-observability-mcp": "src/index.js"
+    "agentic-observability-mcp": "src/index.js"
   },
   "scripts": {
     "start": "node src/index.js",

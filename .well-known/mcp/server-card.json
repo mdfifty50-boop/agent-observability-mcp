@@ -1,6 +1,6 @@
 {
   "serverInfo": {
-    "name": "agent-observability-mcp",
+    "name": "agentic-observability-mcp",
     "version": "0.1.0",
     "description": "AI agent observability via MCP — trace actions, track token costs, monitor tool performance, detect anomalies, and generate audit trails",
     "author": "THRONE AI",
@@ -32,12 +32,12 @@
     "enterprise": "$999/month"
   },
   "install": {
-    "npm": "npx agent-observability-mcp",
+    "npm": "npx agentic-observability-mcp",
     "claude_desktop": {
       "mcpServers": {
         "agent-observability": {
           "command": "npx",
-          "args": ["agent-observability-mcp"]
+          "args": ["agentic-observability-mcp"]
         }
       }
     }
