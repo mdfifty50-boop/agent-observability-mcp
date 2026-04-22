@@ -1,6 +1,11 @@
 {
   "name": "agentic-observability-mcp",
   "version": "0.1.0",
+  "mcpName": "io.github.mdfifty50-boop/agentic-observability",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mdfifty50-boop/agent-observability-mcp"
+  },
   "description": "MCP server providing AI agent observability — tracing, cost tracking, performance monitoring, and audit trails",
   "type": "module",
   "main": "src/index.js",
