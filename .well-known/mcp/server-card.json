@@ -27,9 +27,9 @@
   "pricing": {
     "free_tier": true,
     "free_limit": "1 agent, 10K events/month, 7-day retention",
-    "starter": "$59/month",
-    "pro": "$299/month",
-    "enterprise": "$999/month"
+    "starter": "$59/month — 5 agents, 100K events, 30-day",
+    "pro": "$299/month — 25 agents, 1M events, 90-day",
+    "enterprise": "$999/month — unlimited, 1-year, SOC2"
   },
   "install": {
     "npm": "npx agentic-observability-mcp",
