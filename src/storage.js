@@ -1,104 +1,96 @@
 /**
- * In-memory storage for agent observability data.
- * Structured for easy swap to Redis/Postgres in v2.
+ * SQLite-backed storage for agent observability data.
+ * All exported function signatures are identical to the original in-memory version.
+ * DB is managed by src/db.js — WAL mode, indexes on session_id.
  */
 
-// Session traces: session_id -> { traces: [], created_at, last_activity }
-const sessions = new Map();
+import { stmts } from './db.js';
 
-// Token usage: session_id -> { calls: [], totals: { input_tokens, output_tokens, cost } }
-const tokenUsage = new Map();
-
-// Tool calls: session_id -> { calls: [], stats: { total, successes, failures, avg_latency } }
-const toolCalls = new Map();
-
-/**
- * Get or create a session container.
- */
-function ensureSession(sessionId) {
-  if (!sessions.has(sessionId)) {
-    sessions.set(sessionId, {
-      traces: [],
-      created_at: new Date().toISOString(),
-      last_activity: new Date().toISOString(),
-    });
-  }
-  if (!tokenUsage.has(sessionId)) {
-    tokenUsage.set(sessionId, {
-      calls: [],
-      totals: { input_tokens: 0, output_tokens: 0, cost: 0 },
-    });
-  }
-  if (!toolCalls.has(sessionId)) {
-    toolCalls.set(sessionId, {
-      calls: [],
-      stats: { total: 0, successes: 0, failures: 0, total_latency: 0 },
-    });
-  }
-  return {
-    session: sessions.get(sessionId),
-    tokens: tokenUsage.get(sessionId),
-    tools: toolCalls.get(sessionId),
-  };
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function generateTraceId() {
   return `tr_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-// --- Trace operations ---
+/**
+ * Ensure a session row exists. Returns the session row.
+ */
+function ensureSession(sessionId) {
+  let row = stmts.getSession.get(sessionId);
+  if (!row) {
+    const now = new Date().toISOString();
+    stmts.insertSession.run(sessionId, now, now);
+    row = stmts.getSession.get(sessionId);
+  }
+  return row;
+}
+
+function updateActivity(sessionId, timestamp) {
+  stmts.updateLastActivity.run(timestamp, sessionId);
+}
+
+// ─── Trace operations ─────────────────────────────────────────────────────────
 
 export function addTrace(sessionId, trace) {
-  const { session } = ensureSession(sessionId);
+  ensureSession(sessionId);
+
   const traceId = generateTraceId();
+  const timestamp = trace.timestamp || new Date().toISOString();
+
   const entry = {
     trace_id: traceId,
     session_id: sessionId,
-    ...trace,
-    timestamp: trace.timestamp || new Date().toISOString(),
+    action_type: trace.action_type,
+    tool_name: trace.tool_name,
+    description: trace.description,
+    metadata: trace.metadata || {},
+    timestamp,
   };
-  session.traces.push(entry);
-  session.last_activity = entry.timestamp;
+
+  stmts.insertTrace.run(traceId, sessionId, timestamp, JSON.stringify(entry));
+  updateActivity(sessionId, timestamp);
+
   return entry;
 }
 
-// --- Token usage operations ---
+// ─── Token usage operations ───────────────────────────────────────────────────
 
 export function addTokenUsage(sessionId, usage) {
-  const { tokens } = ensureSession(sessionId);
-  const cost = (usage.input_tokens * usage.cost_per_input_token) +
-    (usage.output_tokens * usage.cost_per_output_token);
+  ensureSession(sessionId);
 
-  const entry = {
-    session_id: sessionId,
-    model: usage.model,
-    provider: usage.provider,
-    input_tokens: usage.input_tokens,
-    output_tokens: usage.output_tokens,
+  const cost =
+    usage.input_tokens * usage.cost_per_input_token +
+    usage.output_tokens * usage.cost_per_output_token;
+
+  const timestamp = new Date().toISOString();
+
+  stmts.insertTokenCall.run(
+    sessionId,
+    usage.model,
+    usage.provider,
+    usage.input_tokens,
+    usage.output_tokens,
     cost,
-    timestamp: new Date().toISOString(),
-  };
+    timestamp
+  );
 
-  tokens.calls.push(entry);
-  tokens.totals.input_tokens += usage.input_tokens;
-  tokens.totals.output_tokens += usage.output_tokens;
-  tokens.totals.cost += cost;
+  updateActivity(sessionId, timestamp);
 
-  // Update session last_activity
-  const { session } = ensureSession(sessionId);
-  session.last_activity = entry.timestamp;
+  // Compute running session total from DB
+  const allCalls = stmts.getTokenCallsBySession.all(sessionId);
+  const runningTotal = allCalls.reduce((sum, r) => sum + r.cost, 0);
 
   return {
     cost,
-    running_session_total: tokens.totals.cost,
-    model_breakdown: getModelBreakdown(sessionId),
+    running_session_total: runningTotal,
+    model_breakdown: _getModelBreakdown(sessionId),
   };
 }
 
-function getModelBreakdown(sessionId) {
-  const { tokens } = ensureSession(sessionId);
+function _getModelBreakdown(sessionId) {
+  const calls = stmts.getTokenCallsBySession.all(sessionId);
   const breakdown = {};
-  for (const call of tokens.calls) {
+  for (const call of calls) {
     if (!breakdown[call.model]) {
       breakdown[call.model] = { calls: 0, input_tokens: 0, output_tokens: 0, cost: 0 };
     }
@@ -110,48 +102,73 @@ function getModelBreakdown(sessionId) {
   return breakdown;
 }
 
-// --- Tool call operations ---
+// ─── Tool call operations ─────────────────────────────────────────────────────
 
 export function addToolCall(sessionId, call) {
-  const { tools, session } = ensureSession(sessionId);
-  const entry = {
-    session_id: sessionId,
-    ...call,
-    timestamp: new Date().toISOString(),
-  };
+  ensureSession(sessionId);
 
-  tools.calls.push(entry);
-  tools.stats.total++;
-  if (call.success) tools.stats.successes++;
-  else tools.stats.failures++;
-  tools.stats.total_latency += call.latency_ms;
+  const timestamp = new Date().toISOString();
 
-  session.last_activity = entry.timestamp;
+  stmts.insertToolCall.run(
+    sessionId,
+    call.server_name,
+    call.tool_name,
+    JSON.stringify(call.params || {}),
+    call.result_summary || null,
+    call.latency_ms,
+    call.success ? 1 : 0,
+    call.error || null,
+    timestamp
+  );
+
+  updateActivity(sessionId, timestamp);
+
+  // Compute stats from DB
+  const allCalls = stmts.getToolCallsBySession.all(sessionId);
+  const total = allCalls.length;
+  const successes = allCalls.filter(c => c.success === 1).length;
+  const failures = total - successes;
+  const totalLatency = allCalls.reduce((sum, c) => sum + c.latency_ms, 0);
 
   return {
-    tool_call_count: tools.stats.total,
-    success_rate: tools.stats.total > 0
-      ? (tools.stats.successes / tools.stats.total * 100).toFixed(1) + '%'
-      : 'N/A',
-    avg_latency_ms: tools.stats.total > 0
-      ? Math.round(tools.stats.total_latency / tools.stats.total)
-      : 0,
+    tool_call_count: total,
+    success_rate:
+      total > 0
+        ? ((successes / total) * 100).toFixed(1) + '%'
+        : 'N/A',
+    avg_latency_ms: total > 0 ? Math.round(totalLatency / total) : 0,
   };
 }
 
-// --- Session summary ---
+// ─── Session summary ──────────────────────────────────────────────────────────
 
 export function getSessionSummary(sessionId) {
-  const { session, tokens, tools } = ensureSession(sessionId);
+  const session = ensureSession(sessionId);
 
+  const traces = stmts.getTracesBySession.all(sessionId).map(r => JSON.parse(r.data_json));
+  const tokenCalls = stmts.getTokenCallsBySession.all(sessionId);
+  const toolCalls = stmts.getToolCallsBySession.all(sessionId);
+
+  // Token totals
+  const totalInputTokens = tokenCalls.reduce((s, r) => s + r.input_tokens, 0);
+  const totalOutputTokens = tokenCalls.reduce((s, r) => s + r.output_tokens, 0);
+  const totalCost = tokenCalls.reduce((s, r) => s + r.cost, 0);
+
+  // Tool stats
+  const totalToolCalls = toolCalls.length;
+  const toolSuccesses = toolCalls.filter(c => c.success === 1).length;
+  const toolFailures = totalToolCalls - toolSuccesses;
+  const totalToolLatency = toolCalls.reduce((s, c) => s + c.latency_ms, 0);
+
+  // Tool breakdown by server/tool key
   const toolBreakdown = {};
-  for (const call of tools.calls) {
+  for (const call of toolCalls) {
     const key = `${call.server_name}/${call.tool_name}`;
     if (!toolBreakdown[key]) {
       toolBreakdown[key] = { calls: 0, successes: 0, failures: 0, avg_latency_ms: 0, total_latency: 0 };
     }
     toolBreakdown[key].calls++;
-    if (call.success) toolBreakdown[key].successes++;
+    if (call.success === 1) toolBreakdown[key].successes++;
     else toolBreakdown[key].failures++;
     toolBreakdown[key].total_latency += call.latency_ms;
   }
@@ -162,12 +179,13 @@ export function getSessionSummary(sessionId) {
     delete toolBreakdown[key].total_latency;
   }
 
-  const errors = [
-    ...session.traces.filter(t => t.action_type === 'error'),
-    ...tools.calls.filter(c => !c.success),
-  ];
+  // Error count: error-type traces + failed tool calls
+  const errorTraces = traces.filter(t => t.action_type === 'error');
+  const errorCount = errorTraces.length + toolFailures;
 
-  const durationMs = session.traces.length > 0 || tokens.calls.length > 0 || tools.calls.length > 0
+  // Duration
+  const hasActivity = traces.length > 0 || tokenCalls.length > 0 || toolCalls.length > 0;
+  const durationMs = hasActivity
     ? new Date(session.last_activity) - new Date(session.created_at)
     : 0;
 
@@ -176,45 +194,52 @@ export function getSessionSummary(sessionId) {
     created_at: session.created_at,
     last_activity: session.last_activity,
     duration_seconds: Math.round(durationMs / 1000),
-    total_cost: parseFloat(tokens.totals.cost.toFixed(6)),
-    total_input_tokens: tokens.totals.input_tokens,
-    total_output_tokens: tokens.totals.output_tokens,
-    total_tokens: tokens.totals.input_tokens + tokens.totals.output_tokens,
-    total_llm_calls: tokens.calls.length,
-    total_tool_calls: tools.stats.total,
-    tool_success_rate: tools.stats.total > 0
-      ? (tools.stats.successes / tools.stats.total * 100).toFixed(1) + '%'
-      : 'N/A',
-    avg_tool_latency_ms: tools.stats.total > 0
-      ? Math.round(tools.stats.total_latency / tools.stats.total)
-      : 0,
-    total_traces: session.traces.length,
-    error_count: errors.length,
-    model_breakdown: getModelBreakdown(sessionId),
+    total_cost: parseFloat(totalCost.toFixed(6)),
+    total_input_tokens: totalInputTokens,
+    total_output_tokens: totalOutputTokens,
+    total_tokens: totalInputTokens + totalOutputTokens,
+    total_llm_calls: tokenCalls.length,
+    total_tool_calls: totalToolCalls,
+    tool_success_rate:
+      totalToolCalls > 0
+        ? ((toolSuccesses / totalToolCalls) * 100).toFixed(1) + '%'
+        : 'N/A',
+    avg_tool_latency_ms:
+      totalToolCalls > 0 ? Math.round(totalToolLatency / totalToolCalls) : 0,
+    total_traces: traces.length,
+    error_count: errorCount,
+    model_breakdown: _getModelBreakdown(sessionId),
     tool_breakdown: toolBreakdown,
   };
 }
 
-// --- Anomaly detection ---
+// ─── Anomaly detection ────────────────────────────────────────────────────────
 
 export function detectAnomalies(sessionId, checkTypes) {
-  const { session, tokens, tools } = ensureSession(sessionId);
+  ensureSession(sessionId);
+
+  const tokenCalls = stmts.getTokenCallsBySession.all(sessionId);
+  const toolCalls = stmts.getToolCallsBySession.all(sessionId);
+
+  const totalCost = tokenCalls.reduce((s, r) => s + r.cost, 0);
+  const totalToolCalls = toolCalls.length;
+  const toolFailures = toolCalls.filter(c => c.success === 0).length;
+
   const anomalies = [];
 
   for (const check of checkTypes) {
     switch (check) {
       case 'cost_spike': {
-        if (tokens.totals.cost > 1.0) {
+        if (totalCost > 1.0) {
           anomalies.push({
             type: 'cost_spike',
-            severity: tokens.totals.cost > 5.0 ? 'critical' : 'warning',
-            message: `Session cost $${tokens.totals.cost.toFixed(4)} exceeds threshold`,
-            value: tokens.totals.cost,
+            severity: totalCost > 5.0 ? 'critical' : 'warning',
+            message: `Session cost $${totalCost.toFixed(4)} exceeds threshold`,
+            value: totalCost,
             threshold: 1.0,
           });
         }
-        // Check for individual expensive calls
-        for (const call of tokens.calls) {
+        for (const call of tokenCalls) {
           if (call.cost > 0.5) {
             anomalies.push({
               type: 'cost_spike',
@@ -229,8 +254,8 @@ export function detectAnomalies(sessionId, checkTypes) {
       }
 
       case 'error_rate': {
-        if (tools.stats.total >= 3) {
-          const errorRate = tools.stats.failures / tools.stats.total;
+        if (totalToolCalls >= 3) {
+          const errorRate = toolFailures / totalToolCalls;
           if (errorRate > 0.3) {
             anomalies.push({
               type: 'error_rate',
@@ -245,7 +270,7 @@ export function detectAnomalies(sessionId, checkTypes) {
       }
 
       case 'latency_spike': {
-        const slowCalls = tools.calls.filter(c => c.latency_ms > 10000);
+        const slowCalls = toolCalls.filter(c => c.latency_ms > 10000);
         if (slowCalls.length > 0) {
           anomalies.push({
             type: 'latency_spike',
@@ -262,9 +287,11 @@ export function detectAnomalies(sessionId, checkTypes) {
       }
 
       case 'loop_detection': {
-        // Detect repeated tool calls with same params
-        const recent = tools.calls.slice(-20);
-        const signatures = recent.map(c => `${c.server_name}/${c.tool_name}:${JSON.stringify(c.params)}`);
+        // Use last 20 tool calls — same params means same JSON signature
+        const recent = toolCalls.slice(-20);
+        const signatures = recent.map(
+          c => `${c.server_name}/${c.tool_name}:${c.params_json || '{}'}`
+        );
         const counts = {};
         for (const sig of signatures) {
           counts[sig] = (counts[sig] || 0) + 1;
@@ -285,8 +312,7 @@ export function detectAnomalies(sessionId, checkTypes) {
       }
 
       case 'token_explosion': {
-        // Check if any single call used excessive tokens
-        for (const call of tokens.calls) {
+        for (const call of tokenCalls) {
           const totalTokens = call.input_tokens + call.output_tokens;
           if (totalTokens > 100000) {
             anomalies.push({
@@ -298,8 +324,10 @@ export function detectAnomalies(sessionId, checkTypes) {
             });
           }
         }
-        // Check session total
-        const sessionTotal = tokens.totals.input_tokens + tokens.totals.output_tokens;
+        const sessionTotal = tokenCalls.reduce(
+          (s, c) => s + c.input_tokens + c.output_tokens,
+          0
+        );
         if (sessionTotal > 500000) {
           anomalies.push({
             type: 'token_explosion',
@@ -323,34 +351,46 @@ export function detectAnomalies(sessionId, checkTypes) {
   };
 }
 
-// --- Cost report across sessions ---
+// ─── Cost report across sessions ──────────────────────────────────────────────
 
 export function getCostReport({ sessionIds, timeRange, groupBy }) {
-  const targetSessions = sessionIds || [...tokenUsage.keys()];
-  const allCalls = [];
+  // Build the full set of calls across requested sessions
+  let allCalls = [];
 
-  for (const sid of targetSessions) {
-    if (!tokenUsage.has(sid)) continue;
-    const { calls } = tokenUsage.get(sid);
-    for (const call of calls) {
-      if (timeRange) {
-        const ts = new Date(call.timestamp);
-        if (timeRange.start && ts < new Date(timeRange.start)) continue;
-        if (timeRange.end && ts > new Date(timeRange.end)) continue;
-      }
-      allCalls.push({ ...call, session_id: sid });
+  if (sessionIds && sessionIds.length > 0) {
+    for (const sid of sessionIds) {
+      const rows = stmts.getTokenCallsBySession.all(sid);
+      allCalls.push(...rows.map(r => ({ ...r })));
+    }
+  } else {
+    // All sessions
+    const allSessions = stmts.listSessions.all().map(r => r.session_id);
+    for (const sid of allSessions) {
+      const rows = stmts.getTokenCallsBySession.all(sid);
+      allCalls.push(...rows.map(r => ({ ...r })));
     }
   }
 
+  // Time range filter
+  if (timeRange) {
+    allCalls = allCalls.filter(call => {
+      const ts = new Date(call.timestamp);
+      if (timeRange.start && ts < new Date(timeRange.start)) return false;
+      if (timeRange.end && ts > new Date(timeRange.end)) return false;
+      return true;
+    });
+  }
+
+  // Group
   const groups = {};
   for (const call of allCalls) {
     let key;
     switch (groupBy) {
-      case 'model': key = call.model; break;
+      case 'model':    key = call.model; break;
       case 'provider': key = call.provider; break;
-      case 'session': key = call.session_id; break;
-      case 'tool': key = 'llm_call'; break;  // token usage is always LLM
-      default: key = call.model;
+      case 'session':  key = call.session_id; break;
+      case 'tool':     key = 'llm_call'; break;
+      default:         key = call.model;
     }
     if (!groups[key]) {
       groups[key] = { calls: 0, input_tokens: 0, output_tokens: 0, cost: 0 };
@@ -361,13 +401,14 @@ export function getCostReport({ sessionIds, timeRange, groupBy }) {
     groups[key].cost += call.cost;
   }
 
-  // Round costs
   for (const key of Object.keys(groups)) {
     groups[key].cost = parseFloat(groups[key].cost.toFixed(6));
   }
 
   const totalCost = allCalls.reduce((sum, c) => sum + c.cost, 0);
   const totalTokens = allCalls.reduce((sum, c) => sum + c.input_tokens + c.output_tokens, 0);
+
+  const targetSessions = sessionIds || stmts.listSessions.all().map(r => r.session_id);
 
   return {
     group_by: groupBy,
@@ -380,8 +421,8 @@ export function getCostReport({ sessionIds, timeRange, groupBy }) {
   };
 }
 
-// --- List all session IDs (for admin) ---
+// ─── List all session IDs (for admin) ────────────────────────────────────────
 
 export function listSessions() {
-  return [...sessions.keys()];
+  return stmts.listSessions.all().map(r => r.session_id);
 }
