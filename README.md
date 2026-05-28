@@ -4,6 +4,7 @@ AI agent observability for MCP. Tracing, cost tracking, performance monitoring, 
 
 [![npm version](https://img.shields.io/npm/v/agentic-observability-mcp)](https://www.npmjs.com/package/agentic-observability-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![SafeSkill 96/100](https://img.shields.io/badge/SafeSkill-96%2F100_Verified%20Safe-brightgreen)](https://safeskill.dev/scan/mdfifty50-boop-agent-observability-mcp)
 
 ## Why This Exists
 
